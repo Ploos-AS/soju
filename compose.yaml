@@ -7,9 +7,14 @@ services:
       - "6667:6667"
     volumes:
       - ./data:/var/lib/soju
+      - soju-runtime:/run/soju
       # To override the bundled configuration, uncomment:
       # - ./config:/etc/soju/config:ro
     security_opt:
       - no-new-privileges:true
     cap_drop:
       - ALL
+
+volumes:
+  soju-runtime:
+    name: ${SOJU_RUNTIME_VOLUME:-soju-runtime}
