@@ -11,17 +11,17 @@ ARG SOJU_COMMIT
 ARG TARGETOS
 ARG TARGETARCH
 
-RUN apk add --no-cache ca-certificates git
+RUN apk add --no-cache ca-certificates git build-base sqlite-dev
 
 WORKDIR /src
 RUN git clone https://codeberg.org/emersion/soju.git . \
     && git checkout --detach "$SOJU_COMMIT" \
     && test "$(git rev-parse HEAD)" = "$SOJU_COMMIT"
 
-RUN CGO_ENABLED=0 GOOS="$TARGETOS" GOARCH="$TARGETARCH" \
-    go build -trimpath -tags moderncsqlite -ldflags='-s -w' -o /out/soju ./cmd/soju \
-    && CGO_ENABLED=0 GOOS="$TARGETOS" GOARCH="$TARGETARCH" \
-    go build -trimpath -tags moderncsqlite -ldflags='-s -w' -o /out/sojudb ./cmd/sojudb
+RUN CGO_ENABLED=1 GOOS="$TARGETOS" GOARCH="$TARGETARCH" \
+    go build -trimpath -ldflags='-s -w' -o /out/soju ./cmd/soju \
+    && CGO_ENABLED=1 GOOS="$TARGETOS" GOARCH="$TARGETARCH" \
+    go build -trimpath -ldflags='-s -w' -o /out/sojudb ./cmd/sojudb
 
 FROM alpine:${ALPINE_VERSION}
 
@@ -38,7 +38,7 @@ LABEL org.opencontainers.image.title="Ploos-AS soju" \
       org.opencontainers.image.licenses="AGPL-3.0-only" \
       io.ploos.soju.upstream.commit="$SOJU_COMMIT"
 
-RUN apk add --no-cache ca-certificates tzdata \
+RUN apk add --no-cache ca-certificates tzdata sqlite-libs \
     && addgroup -g 1000 -S soju \
     && adduser -u 1000 -S -D -H -h /var/lib/soju -s /sbin/nologin -G soju soju \
     && mkdir -p /etc/soju /var/lib/soju \
