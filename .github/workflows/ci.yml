@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Validate Compose
+        run: docker compose config --quiet
+
+      - name: Build amd64 image
+        run: |
+          docker build \
+            --build-arg VERSION=ci \
+            --build-arg REVISION="$GITHUB_SHA" \
+            -t soju:ci .
+
+      - name: Verify non-root runtime
+        run: |
+          test "$(docker run --rm --entrypoint id soju:ci -u)" = "1000"
+          test "$(docker run --rm --entrypoint id soju:ci -g)" = "1000"
+
+      - name: Verify OCI metadata
+        run: |
+          test "$(docker image inspect soju:ci --format '{{ index .Config.Labels "org.opencontainers.image.source" }}')" = "https://github.com/Ploos-AS/soju"
+          test "$(docker image inspect soju:ci --format '{{ index .Config.Labels "org.opencontainers.image.licenses" }}')" = "AGPL-3.0-only"
+          test "$(docker image inspect soju:ci --format '{{ index .Config.Labels "io.ploos.soju.upstream.commit" }}')" = "8bff925bd7b952babe085eedac6c5f9eb68e39c5"
+
+      - name: Verify binaries
+        run: |
+          docker run --rm --entrypoint /usr/local/bin/soju soju:ci -h >/dev/null
+          docker run --rm --entrypoint /usr/local/bin/sojudb soju:ci -h >/dev/null 2>&1 || test "$?" -eq 2
+
+      - name: Verify persistent database startup
+        run: |
+          mkdir -p data-test
+          sudo chown 1000:1000 data-test
+          cid=$(docker run -d --rm -v "$PWD/data-test:/var/lib/soju" soju:ci)
+          trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
+          sleep 3
+          docker ps --filter "id=$cid" --format '{{.ID}}' | grep -q .
+          test -f data-test/main.db
+          docker rm -f "$cid"
+          trap - EXIT
+
+      - name: Build arm64 image
+        run: |
+          docker buildx build \
+            --platform linux/arm64 \
+            --build-arg VERSION=ci \
+            --build-arg REVISION="$GITHUB_SHA" \
+            --load \
+            -t soju:ci-arm64 .
+
+      - name: Verify arm64 binary starts
+        run: docker run --rm --platform linux/arm64 --entrypoint /usr/local/bin/soju soju:ci-arm64 -h >/dev/null
