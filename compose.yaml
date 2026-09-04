@@ -1,0 +1,15 @@
+services:
+  soju:
+    image: ghcr.io/ploos-as/soju:latest
+    container_name: soju
+    restart: unless-stopped
+    ports:
+      - "6667:6667"
+    volumes:
+      - ./data:/var/lib/soju
+      # To override the bundled configuration, uncomment:
+      # - ./config:/etc/soju/config:ro
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
