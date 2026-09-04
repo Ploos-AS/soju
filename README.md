@@ -17,7 +17,7 @@ Target platforms:
 
 ## Upstream pin
 
-The initial image is pinned to upstream commit:
+The image is pinned to upstream commit:
 
 ```text
 8bff925bd7b952babe085eedac6c5f9eb68e39c5
@@ -44,6 +44,24 @@ docker compose exec soju sojudb -config /etc/soju/config create-user <username> 
 
 Restart soju after database changes made with `sojudb`.
 
+## soju-web integration
+
+The bundled configuration exposes soju's local administrative protocol only through a Unix-domain socket:
+
+```text
+listen unix+admin:///run/soju/admin
+```
+
+The reference Compose file mounts `/run/soju` on the named volume `soju-runtime`. `Ploos-AS/soju-web` uses the same volume read-only, so the WebAdmin can use soju's official administrative interface without mounting the Docker socket and without accessing the SQLite database directly.
+
+The shared volume name can be overridden in both projects with:
+
+```text
+SOJU_RUNTIME_VOLUME=<name>
+```
+
+The admin socket is not exposed as a TCP port.
+
 ## Persistence
 
 Persistent state is stored in:
@@ -54,21 +72,25 @@ Persistent state is stored in:
 
 The container runs as UID/GID `1000:1000` (`soju`). Bind-mounted host directories must therefore be writable by that UID/GID.
 
+`/run/soju` is runtime state, not persistent application data. The reference Compose deployment stores it in the shared `soju-runtime` Docker volume solely so trusted companion containers such as soju-web can access the Unix socket.
+
 ## Configuration
 
 A conservative default configuration is included at `/etc/soju/config`:
 
 ```text
 db sqlite3 /var/lib/soju/main.db
-listen irc://0.0.0.0:6667
+listen irc+insecure://0.0.0.0:6667
+listen unix+admin:///run/soju/admin
 ```
 
-To use your own configuration, mount it read-only:
+To use your own configuration, mount it read-only and retain the `unix+admin` listener when using soju-web:
 
 ```yaml
 volumes:
   - ./config:/etc/soju/config:ro
   - ./data:/var/lib/soju
+  - soju-runtime:/run/soju
 ```
 
 ## Security model
@@ -80,7 +102,10 @@ The reference Compose setup:
 - enables `no-new-privileges`
 - does not mount the Docker socket
 - does not use host networking
-- persists only soju application data
+- exposes the admin API only as a Unix-domain socket
+- persists only soju application data; the runtime volume contains the admin socket
+
+CI verifies that the container starts as UID/GID 1000, creates its SQLite database, and creates `/run/soju/admin` as a Unix socket.
 
 ## Releases
 
