@@ -41,8 +41,9 @@ LABEL org.opencontainers.image.title="Ploos-AS soju" \
 RUN apk add --no-cache ca-certificates tzdata sqlite-libs \
     && addgroup -g 1000 -S soju \
     && adduser -u 1000 -S -D -H -h /var/lib/soju -s /sbin/nologin -G soju soju \
-    && mkdir -p /etc/soju /var/lib/soju \
-    && chown -R soju:soju /var/lib/soju
+    && mkdir -p /etc/soju /var/lib/soju /run/soju \
+    && chown -R soju:soju /var/lib/soju /run/soju \
+    && chmod 0770 /run/soju
 
 COPY --from=build /out/soju /usr/local/bin/soju
 COPY --from=build /out/sojudb /usr/local/bin/sojudb
