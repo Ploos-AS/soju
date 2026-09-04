@@ -46,15 +46,26 @@ jobs:
           docker run --rm --entrypoint /usr/local/bin/soju soju:ci -h >/dev/null
           docker run --rm --entrypoint /usr/local/bin/sojudb soju:ci -h >/dev/null 2>&1 || test "$?" -eq 2
 
-      - name: Verify persistent database startup
+      - name: Verify persistent database and admin socket startup
         run: |
-          mkdir -p data-test
-          sudo chown 1000:1000 data-test
-          cid=$(docker run -d --rm -v "$PWD/data-test:/var/lib/soju" soju:ci)
+          mkdir -p data-test run-test
+          sudo chown 1000:1000 data-test run-test
+          cid=$(docker run -d --rm \
+            -v "$PWD/data-test:/var/lib/soju" \
+            -v "$PWD/run-test:/run/soju" \
+            soju:ci)
           trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
-          sleep 3
+          for i in $(seq 1 20); do
+            if docker ps --filter "id=$cid" --format '{{.ID}}' | grep -q . \
+              && test -f data-test/main.db \
+              && test -S run-test/admin; then
+              break
+            fi
+            sleep 1
+          done
           docker ps --filter "id=$cid" --format '{{.ID}}' | grep -q .
           test -f data-test/main.db
+          test -S run-test/admin
           docker rm -f "$cid"
           trap - EXIT
 
