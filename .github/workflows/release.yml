@@ -69,6 +69,41 @@ jobs:
           provenance: mode=max
           sbom: true
 
+      - name: Qualify published image by exact digest
+        env:
+          IMAGE_DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          set -eu
+          image_ref="$(sh scripts/verify-exact-digest-runtime.sh "$IMAGE_NAME" "$IMAGE_DIGEST")"
+          docker pull "$image_ref"
+          resolved="$(docker image inspect "$image_ref" --format '{{index .RepoDigests 0}}')"
+          test "$resolved" = "$image_ref"
+          revision="$(docker image inspect "$image_ref" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')"
+          version="$(docker image inspect "$image_ref" --format '{{index .Config.Labels "org.opencontainers.image.version"}}')"
+          test "$revision" = "$GITHUB_SHA"
+          test "$version" = "$GITHUB_REF_NAME"
+          test "$(docker run --rm --entrypoint id "$image_ref" -u)" = "1000"
+          test "$(docker run --rm --entrypoint id "$image_ref" -g)" = "1000"
+          mkdir -p data-release run-release
+          sudo chown 1000:1000 data-release run-release
+          cid=$(docker run -d --rm \
+            -v "$PWD/data-release:/var/lib/soju" \
+            -v "$PWD/run-release:/run/soju" \
+            "$image_ref")
+          trap 'docker logs "$cid" 2>&1 || true; docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
+          for i in $(seq 1 30); do
+            if docker ps --filter "id=$cid" --format '{{.ID}}' | grep -q . \
+              && test -f data-release/main.db \
+              && test -S run-release/admin; then
+              qualified=true
+              break
+            fi
+            sleep 1
+          done
+          test "${qualified:-false}" = true
+          docker rm -f "$cid"
+          trap - EXIT
+
       - name: Attest image
         uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a
         with:
