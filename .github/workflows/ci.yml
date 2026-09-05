@@ -29,6 +29,17 @@ jobs:
             echo "tag/commit mismatch unexpectedly accepted" >&2
             exit 1
           fi
+          if sh scripts/verify-release-ref.sh v0.0.0-m11.2 "$GITHUB_SHA" invalid-mode; then
+            echo "invalid verification mode unexpectedly accepted" >&2
+            exit 1
+          fi
+          parent="$(git rev-parse HEAD^)"
+          git tag v0.0.0-m11.5-audit "$parent"
+          if sh scripts/verify-release-ref.sh v0.0.0-m11.5-audit "$parent"; then
+            echo "strict mode unexpectedly accepted historical tag" >&2
+            exit 1
+          fi
+          sh scripts/verify-release-ref.sh v0.0.0-m11.5-audit "$parent" --allow-head-mismatch-for-audit
 
       - name: Verify exact-digest policy
         run: |
