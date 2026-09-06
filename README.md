@@ -2,13 +2,23 @@
 
 Production-oriented OCI packaging for [soju](https://soju.im/), the IRC bouncer maintained at Codeberg.
 
-> Upstream already publishes a container image. This repository is an independent Ploos-AS packaging project focused on reproducible source builds, explicit upstream pinning, non-root operation, multi-architecture GHCR releases, and supply-chain attestations. It is not a fork of soju.
+> Upstream already publishes a container image. This repository is an independent Ploos-AS packaging project focused on reproducible source builds, explicit upstream pinning, non-root operation, multi-architecture OCI releases, and supply-chain attestations. It is not a fork of soju.
 
-## Image
+## Images
+
+Primary registry:
 
 ```text
 ghcr.io/ploos-as/soju
 ```
+
+Secondary registry:
+
+```text
+<dockerhub-namespace>/soju
+```
+
+Release workflows publish the same multi-architecture build to GHCR and Docker Hub. Docker Hub authentication uses the GitHub Actions repository variable `DOCKERHUB_USERNAME` and secret `DOCKERHUB_TOKEN`.
 
 Target platforms:
 
@@ -109,7 +119,7 @@ CI verifies that the container starts as UID/GID 1000, creates its SQLite databa
 
 ## Releases
 
-Tags matching `v*` publish semver aliases to GHCR and build both amd64 and arm64 images. Release builds include SBOM and provenance/attestation metadata.
+Tags matching `v*` publish semver aliases to both GHCR and Docker Hub and build both amd64 and arm64 images. Release builds include SBOM and provenance/attestation metadata. The exact published digest is runtime-qualified, and keyless Cosign signatures are written and verified for both registry references.
 
 ## Upstream
 
