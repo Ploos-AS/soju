@@ -6,7 +6,7 @@ on:
       - 'v*'
 
 permissions:
-  contents: read
+  contents: write
   packages: write
   id-token: write
   attestations: write
@@ -133,3 +133,18 @@ jobs:
             --certificate-identity-regexp '^https://github.com/Ploos-AS/soju/.github/workflows/release.yml@refs/tags/v.*$' \
             "${IMAGE_NAME}@${IMAGE_DIGEST}" > /tmp/cosign-verification.json
           test -s /tmp/cosign-verification.json
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "GitHub Release already exists for $GITHUB_REF_NAME"
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "soju $GITHUB_REF_NAME" \
+              --generate-notes \
+              --verify-tag
+          fi
