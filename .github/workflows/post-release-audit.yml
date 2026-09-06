@@ -18,7 +18,7 @@ permissions:
 
 env:
   GHCR_IMAGE: ghcr.io/ploos-as/soju
-  DOCKERHUB_IMAGE: ${{ vars.DOCKERHUB_USERNAME }}/soju
+  DOCKERHUB_IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/soju
 
 jobs:
   audit:
@@ -46,30 +46,21 @@ jobs:
             while IFS= read -r candidate; do
               [[ -n "$candidate" ]] || continue
               commit="$(git rev-list -n 1 "$candidate" 2>/dev/null || true)"
-              if [[ "$commit" == "$PRODUCER_SHA" ]]; then
-                tag="$candidate"
-                break
-              fi
+              if [[ "$commit" == "$PRODUCER_SHA" ]]; then tag="$candidate"; break; fi
             done < <(gh release list --repo "$GITHUB_REPOSITORY" --limit 100 --json tagName,isDraft --jq '.[] | select(.isDraft == false) | .tagName')
           fi
           [[ -n "$tag" ]]
           tag_commit="$(git rev-list -n 1 "$tag")"
-          if [[ -n "$INPUT_TAG" ]]; then
-            sh scripts/verify-release-ref.sh "$tag" "$tag_commit" --allow-head-mismatch-for-audit
-          else
-            sh scripts/verify-release-ref.sh "$tag" "$tag_commit"
-          fi
+          if [[ -n "$INPUT_TAG" ]]; then sh scripts/verify-release-ref.sh "$tag" "$tag_commit" --allow-head-mismatch-for-audit; else sh scripts/verify-release-ref.sh "$tag" "$tag_commit"; fi
           release_json="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json tagName,isDraft,isPrerelease)"
           jq -e --arg tag "$tag" '.tagName == $tag and .isDraft == false' <<<"$release_json" >/dev/null
-          if [[ -n "$PRODUCER_SHA" ]]; then
-            test "$tag_commit" = "$PRODUCER_SHA"
-          fi
+          if [[ -n "$PRODUCER_SHA" ]]; then test "$tag_commit" = "$PRODUCER_SHA"; fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "commit=$tag_commit" >> "$GITHUB_OUTPUT"
 
       - name: Validate Docker Hub audit configuration
         env:
-          DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
         run: |
           set -eu
@@ -92,7 +83,7 @@ jobs:
       - name: Log in to Docker Hub
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
         with:
-          username: ${{ vars.DOCKERHUB_USERNAME }}
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Resolve immutable release digest and verify registry parity
@@ -104,15 +95,12 @@ jobs:
           set -euo pipefail
           ghcr_tag="${GHCR_IMAGE}:${TAG#v}"
           dockerhub_tag="${DOCKERHUB_IMAGE}:${TAG#v}"
-
           docker manifest inspect "$ghcr_tag" > /tmp/ghcr-manifest.json
           jq -e 'any(.manifests[]; .platform.os == "linux" and .platform.architecture == "amd64")' /tmp/ghcr-manifest.json >/dev/null
           jq -e 'any(.manifests[]; .platform.os == "linux" and .platform.architecture == "arm64")' /tmp/ghcr-manifest.json >/dev/null
-
           docker manifest inspect "$dockerhub_tag" > /tmp/dockerhub-manifest.json
           jq -e 'any(.manifests[]; .platform.os == "linux" and .platform.architecture == "amd64")' /tmp/dockerhub-manifest.json >/dev/null
           jq -e 'any(.manifests[]; .platform.os == "linux" and .platform.architecture == "arm64")' /tmp/dockerhub-manifest.json >/dev/null
-
           ghcr_digest="$(docker buildx imagetools inspect "$ghcr_tag" | awk '/^Digest:/ {print $2; exit}')"
           dockerhub_digest="$(docker buildx imagetools inspect "$dockerhub_tag" | awk '/^Digest:/ {print $2; exit}')"
           test -n "$ghcr_digest"
@@ -130,16 +118,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cosign verify \
-            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-            --certificate-identity-regexp '^https://github.com/Ploos-AS/soju/.github/workflows/release.yml@refs/tags/v.*$' \
-            "${GHCR_IMAGE}@${IMAGE_DIGEST}" > /tmp/cosign-ghcr.json
-          jq -e 'length > 0' /tmp/cosign-ghcr.json >/dev/null
-          cosign verify \
-            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-            --certificate-identity-regexp '^https://github.com/Ploos-AS/soju/.github/workflows/release.yml@refs/tags/v.*$' \
-            "${DOCKERHUB_IMAGE}@${IMAGE_DIGEST}" > /tmp/cosign-dockerhub.json
-          jq -e 'length > 0' /tmp/cosign-dockerhub.json >/dev/null
+          for image in "$GHCR_IMAGE" "$DOCKERHUB_IMAGE"; do
+            cosign verify --certificate-oidc-issuer https://token.actions.githubusercontent.com --certificate-identity-regexp '^https://github.com/Ploos-AS/soju/.github/workflows/release.yml@refs/tags/v.*$' "${image}@${IMAGE_DIGEST}" > /tmp/cosign-verification.json
+            jq -e 'length > 0' /tmp/cosign-verification.json >/dev/null
+          done
 
       - name: Verify immutable labels and runtime after release
         env:
@@ -159,18 +141,10 @@ jobs:
           test "$(docker run --rm --platform linux/amd64 --entrypoint id "$image_ref" -g)" = "1000"
           mkdir -p data-audit run-audit
           sudo chown 1000:1000 data-audit run-audit
-          cid=$(docker run -d --rm --platform linux/amd64 \
-            -v "$PWD/data-audit:/var/lib/soju" \
-            -v "$PWD/run-audit:/run/soju" \
-            "$image_ref")
+          cid=$(docker run -d --rm --platform linux/amd64 -v "$PWD/data-audit:/var/lib/soju" -v "$PWD/run-audit:/run/soju" "$image_ref")
           trap 'docker logs "$cid" 2>&1 || true; docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
           for i in $(seq 1 30); do
-            if docker ps --filter "id=$cid" --format '{{.ID}}' | grep -q . \
-              && test -f data-audit/main.db \
-              && test -S run-audit/admin; then
-              healthy=true
-              break
-            fi
+            if docker ps --filter "id=$cid" --format '{{.ID}}' | grep -q . && test -f data-audit/main.db && test -S run-audit/admin; then healthy=true; break; fi
             sleep 1
           done
           test "${healthy:-false}" = true
