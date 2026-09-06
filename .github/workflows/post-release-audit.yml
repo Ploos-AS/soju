@@ -17,7 +17,8 @@ permissions:
   id-token: write
 
 env:
-  IMAGE_NAME: ghcr.io/ploos-as/soju
+  GHCR_IMAGE: ghcr.io/ploos-as/soju
+  DOCKERHUB_IMAGE: ${{ vars.DOCKERHUB_USERNAME }}/soju
 
 jobs:
   audit:
@@ -66,6 +67,15 @@ jobs:
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "commit=$tag_commit" >> "$GITHUB_OUTPUT"
 
+      - name: Validate Docker Hub audit configuration
+        env:
+          DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          set -eu
+          test -n "$DOCKERHUB_USERNAME"
+          test -n "$DOCKERHUB_TOKEN"
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130
 
@@ -79,27 +89,42 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Resolve immutable release digest and verify platforms
+      - name: Log in to Docker Hub
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Resolve immutable release digest and verify registry parity
         id: image
         env:
           TAG: ${{ steps.release.outputs.tag }}
         shell: bash
         run: |
           set -euo pipefail
-          image_tag="${IMAGE_NAME}:${TAG#v}"
-          docker manifest inspect "$image_tag" > /tmp/manifest.json
-          jq -e 'any(.manifests[]; .platform.os == "linux" and .platform.architecture == "amd64")' /tmp/manifest.json >/dev/null
-          jq -e 'any(.manifests[]; .platform.os == "linux" and .platform.architecture == "arm64")' /tmp/manifest.json >/dev/null
-          docker pull --platform linux/amd64 "$image_tag" >/dev/null
-          repo_digest="$(docker image inspect "$image_tag" --format '{{index .RepoDigests 0}}')"
-          digest="${repo_digest##*@}"
-          sh scripts/verify-exact-digest-runtime.sh "$IMAGE_NAME" "$digest" >/dev/null
-          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          ghcr_tag="${GHCR_IMAGE}:${TAG#v}"
+          dockerhub_tag="${DOCKERHUB_IMAGE}:${TAG#v}"
+
+          docker manifest inspect "$ghcr_tag" > /tmp/ghcr-manifest.json
+          jq -e 'any(.manifests[]; .platform.os == "linux" and .platform.architecture == "amd64")' /tmp/ghcr-manifest.json >/dev/null
+          jq -e 'any(.manifests[]; .platform.os == "linux" and .platform.architecture == "arm64")' /tmp/ghcr-manifest.json >/dev/null
+
+          docker manifest inspect "$dockerhub_tag" > /tmp/dockerhub-manifest.json
+          jq -e 'any(.manifests[]; .platform.os == "linux" and .platform.architecture == "amd64")' /tmp/dockerhub-manifest.json >/dev/null
+          jq -e 'any(.manifests[]; .platform.os == "linux" and .platform.architecture == "arm64")' /tmp/dockerhub-manifest.json >/dev/null
+
+          ghcr_digest="$(docker buildx imagetools inspect "$ghcr_tag" | awk '/^Digest:/ {print $2; exit}')"
+          dockerhub_digest="$(docker buildx imagetools inspect "$dockerhub_tag" | awk '/^Digest:/ {print $2; exit}')"
+          test -n "$ghcr_digest"
+          test "$dockerhub_digest" = "$ghcr_digest"
+          sh scripts/verify-exact-digest-runtime.sh "$GHCR_IMAGE" "$ghcr_digest" >/dev/null
+          sh scripts/verify-exact-digest-runtime.sh "$DOCKERHUB_IMAGE" "$dockerhub_digest" >/dev/null
+          echo "digest=$ghcr_digest" >> "$GITHUB_OUTPUT"
 
       - name: Install Cosign
         uses: sigstore/cosign-installer@d7543c93d881b35a8faa02e8e3605f69b7a1ce62
 
-      - name: Verify exact-digest signature
+      - name: Verify exact-digest signatures
         env:
           IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
         shell: bash
@@ -108,8 +133,13 @@ jobs:
           cosign verify \
             --certificate-oidc-issuer https://token.actions.githubusercontent.com \
             --certificate-identity-regexp '^https://github.com/Ploos-AS/soju/.github/workflows/release.yml@refs/tags/v.*$' \
-            "${IMAGE_NAME}@${IMAGE_DIGEST}" > /tmp/cosign-verification.json
-          jq -e 'length > 0' /tmp/cosign-verification.json >/dev/null
+            "${GHCR_IMAGE}@${IMAGE_DIGEST}" > /tmp/cosign-ghcr.json
+          jq -e 'length > 0' /tmp/cosign-ghcr.json >/dev/null
+          cosign verify \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --certificate-identity-regexp '^https://github.com/Ploos-AS/soju/.github/workflows/release.yml@refs/tags/v.*$' \
+            "${DOCKERHUB_IMAGE}@${IMAGE_DIGEST}" > /tmp/cosign-dockerhub.json
+          jq -e 'length > 0' /tmp/cosign-dockerhub.json >/dev/null
 
       - name: Verify immutable labels and runtime after release
         env:
@@ -119,7 +149,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          image_ref="${IMAGE_NAME}@${IMAGE_DIGEST}"
+          image_ref="${GHCR_IMAGE}@${IMAGE_DIGEST}"
           docker pull --platform linux/amd64 "$image_ref" >/dev/null
           revision="$(docker image inspect "$image_ref" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')"
           version="$(docker image inspect "$image_ref" --format '{{index .Config.Labels "org.opencontainers.image.version"}}')"
@@ -153,13 +183,14 @@ jobs:
           IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
         run: |
           {
-            echo '### M11.5 post-release audit'
+            echo '### M12.1 dual-registry post-release audit'
             echo
             echo "- release: $TAG"
             echo "- immutable digest: $IMAGE_DIGEST"
             echo '- GitHub Release/tag/commit binding: verified'
-            echo '- linux/amd64 + linux/arm64 manifest coverage: verified'
-            echo '- Cosign keyless signature and release workflow OIDC identity: verified'
+            echo '- GHCR + Docker Hub digest parity: verified'
+            echo '- linux/amd64 + linux/arm64 manifest coverage in both registries: verified'
+            echo '- Cosign keyless signatures in both registries: verified'
             echo '- OCI revision/version labels: verified'
             echo '- non-root UID/GID 1000: verified'
             echo '- exact-digest post-publication SQLite + admin-socket runtime: verified'
